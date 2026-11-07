@@ -1,0 +1,249 @@
+﻿<!-- TODO: fix zone preview overriding personal range indicator -->
+<!-- TODO: fix zone preview not showing after first round -->
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Alliance Hub</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <main>
+        <div id="createLobbyModal" class="modal hidden" aria-hidden="true">
+          <div class="modal-card panel">
+            <div class="panel-header modal-header">
+              <h2>Create a lobby</h2>
+              <button id="closeLobbyModalBtn" class="secondary" type="button">Close</button>
+            </div>
+
+            <form id="lobbyForm" class="lobby-form">
+              <label>
+                Lobby name
+                <input id="lobbyNameInput" type="text" maxlength="30" placeholder="Lobby 1" />
+              </label>
+
+              <label>
+                Grid size
+                <input id="gridSizeInput" type="number" min="8" max="24" value="14" />
+              </label>
+
+              <label>
+                Refresh mode
+                <select id="refreshModeInput">
+                  <option value="standard">Standard</option>
+                  <option value="quick">Quick</option>
+                </select>
+              </label>
+
+              <label id="refreshTimeField">
+                AP refresh time (PST)
+                <input id="refreshTimeInput" type="time" value="20:00" />
+              </label>
+
+              <label id="quickRefreshField" class="hidden">
+                Quick refresh interval
+                <input id="quickRefreshInput" type="text" value="12:00" placeholder="HH:MM" />
+              </label>
+
+              <label class="checkbox-row">
+                <input id="shrinkToggleInput" type="checkbox" />
+                <span>Zone shrink enabled</span>
+              </label>
+
+              <label id="shrinkIntervalField" class="hidden">
+                Shrink every
+                <input id="shrinkIntervalInput" type="range" min="1" max="10" value="1" />
+                <div class="range-value"><span id="shrinkIntervalValue">1</span> round(s)</div>
+              </label>
+
+              <label class="checkbox-row">
+                <input id="testLobbyToggleInput" type="checkbox" />
+                <span>Test lobby</span>
+              </label>
+
+              <label id="testPlayerCountField" class="hidden">
+                Fake players
+                <input id="testPlayerCountInput" type="range" min="1" max="19" value="5" />
+                <div class="range-value"><span id="testPlayerCountValue">5</span></div>
+              </label>
+
+              <button type="submit" class="primary">Create lobby</button>
+            </form>
+          </div>
+        </div>
+
+        <div id="forfeitModal" class="modal hidden" aria-hidden="true">
+          <div class="modal-card panel confirm-card">
+            <div class="panel-header modal-header">
+              <h2>Forfeit match</h2>
+            </div>
+            <div class="confirm-copy">
+              <p>Are you sure you want to forfeit? This will instantly down your character and end your participation in the match.</p>
+            </div>
+            <div class="confirm-actions">
+              <button id="cancelForfeitBtn" class="secondary" type="button">Cancel</button>
+              <button id="confirmForfeitBtn" class="primary danger" type="button">Forfeit</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="upgradeModal" class="modal hidden" aria-hidden="true">
+          <div class="modal-card panel confirm-card">
+            <div class="panel-header modal-header">
+              <h2>Upgrade range</h2>
+            </div>
+            <div class="confirm-copy">
+              <p>Spend 2 AP to increase your range by 1? This cannot be undone.</p>
+            </div>
+            <div class="confirm-actions">
+              <button id="cancelUpgradeBtn" class="secondary" type="button">Cancel</button>
+              <button id="confirmUpgradeBtn" class="primary" type="button">Upgrade</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="declareWinModal" class="modal hidden" aria-hidden="true">
+          <div class="modal-card panel confirm-card">
+            <div class="panel-header modal-header">
+              <h2>Declare victory</h2>
+            </div>
+            <div class="confirm-copy">
+              <p>Only one player remains. Declare the match won and end the lobby?</p>
+            </div>
+            <div class="confirm-actions">
+              <button id="cancelWinBtn" class="secondary" type="button">Cancel</button>
+              <button id="confirmWinBtn" class="primary" type="button">Declare win</button>
+            </div>
+          </div>
+        </div>
+
+        <section id="lobbyScreen" class="screen active">
+          <header class="topbar">
+            <div>
+              <p class="eyebrow">Alliance</p>
+              <h1>Lobby hub</h1>
+            </div>
+
+            <div id="profileBox" class="profile-box">
+              <label>
+                Alias
+                <input id="profileNameInput" type="text" maxlength="20" placeholder="Your alias" />
+              </label>
+              <label>
+                Icon
+                <select id="profileIconInput">
+                  <option value="⚔️">⚔️</option>
+                  <option value="🛡️">🛡️</option>
+                  <option value="🧭">🧭</option>
+                  <option value="🌙">🌙</option>
+                  <option value="🔥">🔥</option>
+                  <option value="💠">💠</option>
+                  <option value="✨">✨</option>
+                  <option value="🦊">🦊</option>
+                </select>
+              </label>
+              <label>
+                Color
+                <input id="profileColorInput" type="color" value="#4a7ae8" />
+              </label>
+              <button id="saveProfileBtn" class="primary" type="button">Save identity</button>
+            </div>
+          </header>
+
+          <div class="hub-grid">
+            <section class="panel">
+              <div class="panel-header">
+                <h2>Current Lobbies</h2>
+                <button id="openCreateLobbyBtn" class="primary" type="button">Create lobby</button>
+              </div>
+              <div id="lobbyList" class="lobby-list"></div>
+            </section>
+
+            <section class="panel rules-panel">
+              <div class="panel-header">
+                <h2>Rules</h2>
+              </div>
+              <ul class="rules-list">
+                <li>All players start at a random tile on the board with 3 hearts and 1 AP.</li>
+                <li>Anyone can act at any time. AP is granted at the scheduled refresh time, and the first refresh may come sooner than 24 hours from the start in standard mode.</li>
+                <li>Every refresh each living player gains 1 AP. Downed players keep their position and lose all AP permanently.</li>
+                <li>Actions include moving to an adjacent open square, attacking a target in range, upgrading range, gifting AP, gifting a heart, or doing nothing.</li>
+                <li>Range is 3 in each cardinal direction and 2 diagonally, creating a connected radial pattern around the player. Your current range is always highlighted.</li>
+                <li>If a player is reduced to 0 hearts they are downed. A heart gift can revive them if they're within range and have not been swallowed outside the zone.</li>
+                <li>Downed players form a jury and may vote daily for the player they want to give +1 AP. If a juror is revived before the next refresh, their vote is removed.</li>
+                <li>If the zone shrink setting is enabled, the board shows a light warning ring one refresh before the zone contracts. On the following refresh, the outer border becomes a red danger zone and starts dealing damage to anyone still inside it. Players outside the safe board lose 1 heart on each shrink cycle and are removed if they hit 0 hearts.</li>
+                <li>The lobby host controls the lobby settings before starting the match. Once a match starts, all players are moved to the live board page and can return to the hub without affecting their in-progress game.</li>
+              </ul>
+            </section>
+          </div>
+        </section>
+
+        <section id="gameScreen" class="screen">
+          <div class="game-topbar panel">
+            <div>
+              <p class="eyebrow">Live match</p>
+              <h2 id="lobbyNameText">Alliance lobby</h2>
+            </div>
+
+            <div class="inline-actions">
+              <div class="hud-stat">
+                <span>Refresh</span>
+                <strong id="refreshTimerText">--:--:--</strong>
+              </div>
+              <div class="hud-stat">
+                <span>Zone Shrink</span>
+                <strong id="zoneCountdownText">Zone off</strong>
+              </div>
+              <div class="hud-stat">
+                <span>Board</span>
+                <strong id="zoneDisplayText">14x14</strong>
+              </div>
+              <button id="returnLobbyBtn" class="secondary" type="button">Back to Lobby Hub</button>
+            </div>
+          </div>
+
+          <div class="game-layout">
+            <section class="panel board-panel">
+              <div id="board" class="board" aria-label="Alliance game board"></div>
+            </section>
+
+            <aside class="sidebar">
+              <section class="panel">
+                <h3>Your info</h3>
+                <div id="playerCard" class="player-card"></div>
+              </section>
+
+              <section class="panel">
+                <h3>Actions</h3>
+                <div class="action-grid">
+                  <button type="button" data-action="move">Move (1 AP)</button>
+                  <button type="button" data-action="attack">Attack (1 AP)</button>
+                  <button type="button" data-action="gift-heart">Gift heart (1 heart)</button>
+                  <button type="button" data-action="gift-ap">Gift AP (1 AP)</button>
+                  <button type="button" data-action="upgrade">Upgrade range</button>
+                  <button id="declareWinBtn" type="button" class="primary win-action hidden">Declare win</button>
+                  <button id="forfeitBtn" type="button" class="danger">Forfeit</button>
+                </div>
+              </section>
+
+              <section class="panel">
+                <h3>Roster</h3>
+                <div id="playerRoster" class="player-roster"></div>
+              </section>
+
+              <section class="panel">
+                <h3>Match log</h3>
+                <ul id="logList" class="log-list"></ul>
+              </section>
+            </aside>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>

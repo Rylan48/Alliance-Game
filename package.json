@@ -1,0 +1,20 @@
+{
+  "name": "alliance",
+  "version": "1.0.0",
+  "description": "This is a browser-playable prototype for the Alliance social strategy game.",
+  "main": "server.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "express": "^5.3.0"
+  }
+}
