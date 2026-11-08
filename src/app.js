@@ -79,6 +79,94 @@ async function syncRemoteLobbies() {
   }
 }
 
+let realtimeClient = null;
+let realtimeChannel = null;
+
+async function connectRealtimeSubscriptions() {
+  if (!window.supabase || realtimeClient) {
+    return;
+  }
+
+  try {
+    const config = await fetchJson("/api/config");
+    if (!config.configured || !config.url || !config.anonKey) {
+      return;
+    }
+
+    realtimeClient = window.supabase.createClient(config.url, config.anonKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false
+      }
+    });
+
+    realtimeChannel = realtimeClient.channel("alliance-live");
+    realtimeChannel
+      .on("postgres_changes", { event: "*", schema: "public", table: "lobbies" }, () => {
+        syncRemoteLobbies();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "lobby_players" }, () => {
+        syncRemoteLobbies();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "games" }, () => {
+        syncRemoteLobbies();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "game_players" }, () => {
+        syncRemoteLobbies();
+      })
+      .subscribe();
+  } catch (error) {
+    console.warn("Unable to connect Supabase Realtime", error);
+  }
+}
+
+function isUuid(value) {
+  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+async function ensureRemoteProfile() {
+  if (!state.profile) {
+    state.profile = {
+      id: createLocalId("player"),
+      name: "",
+      icon: DEFAULT_ICONS[0],
+      color: DEFAULT_COLORS[0],
+      diedLobbyIds: []
+    };
+  }
+
+  if (!state.profile.id || isUuid(state.profile.id)) {
+    return true;
+  }
+
+  try {
+    const response = await fetchJson("/api/profiles", {
+      method: "POST",
+      body: JSON.stringify({
+        displayName: state.profile.name || "Player",
+        icon: state.profile.icon || DEFAULT_ICONS[0],
+        color: state.profile.color || DEFAULT_COLORS[0]
+      })
+    });
+
+    const profile = response && response.profile ? response.profile : null;
+    if (!profile || !profile.id) {
+      return false;
+    }
+
+    state.profile.id = profile.id;
+    state.profile.name = profile.display_name || profile.displayName || state.profile.name || "Player";
+    state.profile.icon = profile.icon || state.profile.icon || DEFAULT_ICONS[0];
+    state.profile.color = profile.color || state.profile.color || DEFAULT_COLORS[0];
+    saveState();
+    setProfileInputs();
+    return true;
+  } catch (error) {
+    console.warn("Unable to sync profile to remote server", error);
+    return false;
+  }
+}
+
 function setProfileInputs() {
   dom.profileNameInput.value = state.profile.name;
   dom.profileIconInput.value = state.profile.icon || DEFAULT_ICONS[0];
@@ -184,6 +272,12 @@ function buildTestPlayers(count) {
 async function createLobby(event) {
   event.preventDefault();
 
+  const synced = await ensureRemoteProfile();
+  if (!synced || !state.profile.id) {
+    alert("Your player profile has not been synced yet. Please try again.");
+    return;
+  }
+
   const payload = {
     name: dom.lobbyNameInput.value.trim() || `lobby ${state.lobbies.filter((lobby) => !lobby.game).length + 1}`,
     hostId: state.profile.id,
@@ -237,6 +331,12 @@ async function createLobby(event) {
 async function joinLobby(lobbyId) {
   const lobby = state.lobbies.find((entry) => entry.id === lobbyId);
   if (!lobby) {
+    return;
+  }
+
+  const synced = await ensureRemoteProfile();
+  if (!synced || !state.profile.id) {
+    alert("Your player profile has not been synced yet. Please try again.");
     return;
   }
 
@@ -1264,7 +1364,7 @@ window.__alliance = {
   registerDeathForPlayer
 };
 
-function init() {
+async function init() {
   loadState();
   if (!state.profile.name) {
     state.profile.name = "";
@@ -1276,6 +1376,8 @@ function init() {
     state.profile.color = DEFAULT_COLORS[0];
   }
 
+  await ensureRemoteProfile();
+  await connectRealtimeSubscriptions();
   setProfileInputs();
   bindEvents();
   syncRefreshModeControls();

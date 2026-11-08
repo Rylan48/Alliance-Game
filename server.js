@@ -1,12 +1,34 @@
+require('dotenv').config();
+
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const { createClient } = require('@supabase/supabase-js');
+const {
+  ensureProfile,
+  listLobbies: listSupabaseLobbies,
+  createLobby: createSupabaseLobby,
+  joinLobby: joinSupabaseLobby,
+  startGameForLobby,
+  getGameStateForId,
+  submitGameAction: submitSupabaseAction
+} = require('./src/supabase/repository');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const rootDir = __dirname;
 const dataDir = path.join(rootDir, 'data');
 const stateFile = path.join(dataDir, 'alliance-state.json');
+const supabaseUrl = process.env.SUPABASE_URL || null;
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || null;
+const supabase = supabaseUrl && supabaseServiceRoleKey
+  ? createClient(supabaseUrl, supabaseServiceRoleKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false
+      }
+    })
+  : null;
 
 let store = { lobbies: [] };
 
@@ -46,6 +68,10 @@ function createId(prefix = 'item') {
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+function hasSupabaseConfig() {
+  return Boolean(supabaseUrl && supabaseServiceRoleKey);
 }
 
 function parseQuickRefreshMinutes(value) {
@@ -366,14 +392,66 @@ function findGameById(gameId) {
   return null;
 }
 
+function normalizeLobbyForClient(lobby) {
+  const rawSettings = lobby && lobby.settings ? lobby.settings : {};
+  return {
+    id: lobby.id,
+    name: lobby.name || 'Alliance lobby',
+    hostId: lobby.hostId || lobby.host_profile_id || null,
+    status: lobby.status || 'queue',
+    shareCode: lobby.shareCode || lobby.share_code || null,
+    settings: {
+      ...rawSettings,
+      gridSize: Number(rawSettings.gridSize ?? rawSettings.grid_size ?? 14),
+      refreshMode: rawSettings.refreshMode || rawSettings.refresh_mode || 'standard',
+      refreshTimePst: rawSettings.refreshTimePst || rawSettings.refresh_time_pst || '20:00',
+      quickRefresh: rawSettings.quickRefresh || rawSettings.quick_refresh || '12:00',
+      allowZoneShrink: Boolean(rawSettings.allowZoneShrink ?? rawSettings.allow_zone_shrink),
+      zoneShrinkEvery: clamp(Number(rawSettings.zoneShrinkEvery ?? rawSettings.zone_shrink_every ?? 1), 1, 10),
+      isTestLobby: Boolean(rawSettings.isTestLobby ?? rawSettings.is_test_lobby),
+      fakePlayerCount: Number(rawSettings.fakePlayerCount ?? rawSettings.fake_player_count ?? 0)
+    },
+    players: Array.isArray(lobby.players) ? lobby.players : [],
+    game: lobby.game || null,
+    gameId: lobby.gameId || lobby.game_id || null,
+    playerCount: Array.isArray(lobby.players) ? lobby.players.length : lobby.playerCount || 0
+  };
+}
+
 function getPlayerById(game, playerId) {
   return game.players.find((player) => player.id === playerId) || null;
 }
 
-function createLobby(req, res) {
+async function createLobby(req, res) {
   const { name, hostId, settings = {} } = req.body || {};
   if (!hostId) {
     return res.status(400).json({ ok: false, error: 'hostId required' });
+  }
+
+  if (hasSupabaseConfig()) {
+    try {
+      const remoteLobby = await createSupabaseLobby({
+        name,
+        hostProfileId: hostId,
+        settings: {
+          ...settings,
+          gridSize: clamp(Number(settings.gridSize) || 14, 8, 24),
+          refreshMode: settings.refreshMode || 'standard',
+          refreshTimePst: settings.refreshTimePst || '20:00',
+          quickRefresh: settings.quickRefresh || '12:00',
+          allowZoneShrink: Boolean(settings.allowZoneShrink),
+          zoneShrinkEvery: clamp(Number(settings.zoneShrinkEvery) || 1, 1, 10),
+          isTestLobby: Boolean(settings.isTestLobby),
+          fakePlayerCount: clamp(Number(settings.fakePlayerCount) || 0, 0, 19),
+          hostName: settings.hostName || 'Player',
+          hostIcon: settings.hostIcon || '⚔️',
+          hostColor: settings.hostColor || '#4a7ae8'
+        }
+      });
+      return res.json({ ok: true, lobby: normalizeLobbyForClient(remoteLobby) });
+    } catch (error) {
+      return res.status(500).json({ ok: false, error: error.message || 'Unable to create remote lobby' });
+    }
   }
 
   const lobby = {
@@ -406,8 +484,34 @@ function createLobby(req, res) {
   res.json({ ok: true, lobby: serializeLobby(lobby) });
 }
 
-function joinLobby(req, res) {
-  const { lobbyId, player } = req.body || {};
+async function joinLobby(req, res) {
+  const body = req.body || {};
+  const lobbyId = body.lobbyId || body.lobby_id || req.params && req.params.lobbyId || null;
+  const player = body.player || {};
+  const profileId = body.profile_id || body.profileId || player.id || null;
+  const playerName = player.name || body.display_name || body.displayName || 'Player';
+  const playerIcon = player.icon || body.icon || '⚔️';
+  const playerColor = player.color || body.color || '#4a7ae8';
+
+  if (!lobbyId || !profileId) {
+    return res.status(400).json({ ok: false, error: 'lobbyId and profileId are required' });
+  }
+
+  if (hasSupabaseConfig()) {
+    try {
+      const remoteLobby = await joinSupabaseLobby({
+        lobbyId,
+        profileId,
+        displayName: playerName,
+        icon: playerIcon,
+        color: playerColor
+      });
+      return res.json({ ok: true, lobby: normalizeLobbyForClient(remoteLobby) });
+    } catch (error) {
+      return res.status(500).json({ ok: false, error: error.message || 'Unable to join remote lobby' });
+    }
+  }
+
   const lobby = findLobbyById(lobbyId);
   if (!lobby) {
     return res.status(404).json({ ok: false, error: 'lobby not found' });
@@ -416,13 +520,13 @@ function joinLobby(req, res) {
     return res.status(409).json({ ok: false, error: 'match already started' });
   }
 
-  const existing = lobby.players.find((entry) => entry.id === player.id);
+  const existing = lobby.players.find((entry) => entry.id === profileId);
   if (!existing) {
     lobby.players.push({
-      id: player.id,
-      name: String(player.name || 'Player').trim() || 'Player',
-      icon: player.icon || '⚔️',
-      color: player.color || '#4a7ae8',
+      id: profileId,
+      name: String(playerName).trim() || 'Player',
+      icon: playerIcon,
+      color: playerColor,
       isHost: false
     });
   }
@@ -431,8 +535,20 @@ function joinLobby(req, res) {
   res.json({ ok: true, lobby: serializeLobby(lobby) });
 }
 
-function startMatch(req, res) {
+async function startMatch(req, res) {
   const { lobbyId } = req.params || {};
+
+  if (hasSupabaseConfig()) {
+    try {
+      const game = await startGameForLobby({ lobbyId });
+      const lobby = await listSupabaseLobbies();
+      const activeLobby = lobby.find((entry) => entry.id === lobbyId) || null;
+      return res.json({ ok: true, game, lobby: activeLobby ? normalizeLobbyForClient(activeLobby) : null });
+    } catch (error) {
+      return res.status(500).json({ ok: false, error: error.message || 'Unable to start remote match' });
+    }
+  }
+
   const lobby = findLobbyById(lobbyId);
   if (!lobby) {
     return res.status(404).json({ ok: false, error: 'lobby not found' });
@@ -497,7 +613,19 @@ function startMatch(req, res) {
   res.json({ ok: true, game: serializeGame(lobby.game), lobby: serializeLobby(lobby) });
 }
 
-function listLobbies(req, res) {
+async function listLobbies(req, res) {
+  if (hasSupabaseConfig()) {
+    try {
+      const lobbies = await listSupabaseLobbies();
+      return res.json({
+        ok: true,
+        lobbies: lobbies.map(normalizeLobbyForClient)
+      });
+    } catch (error) {
+      return res.status(500).json({ ok: false, error: error.message || 'Unable to load remote lobbies' });
+    }
+  }
+
   store.lobbies.forEach((lobby) => {
     if (lobby.game) {
       advanceRefresh(lobby);
@@ -511,8 +639,18 @@ function listLobbies(req, res) {
   });
 }
 
-function getGameState(req, res) {
+async function getGameState(req, res) {
   const { gameId } = req.params || {};
+
+  if (hasSupabaseConfig()) {
+    try {
+      const game = await getGameStateForId({ gameId });
+      return res.json({ ok: true, game });
+    } catch (error) {
+      return res.status(500).json({ ok: false, error: error.message || 'Unable to load remote game state' });
+    }
+  }
+
   const game = findGameById(gameId);
   if (!game) {
     return res.status(404).json({ ok: false, error: 'game not found' });
@@ -527,8 +665,26 @@ function getGameState(req, res) {
   res.json({ ok: true, game: serializeGame(game) });
 }
 
-function submitAction(req, res) {
+async function submitAction(req, res) {
   const { gameId } = req.params || {};
+
+  if (hasSupabaseConfig()) {
+    try {
+      const { profile_id, profileId, action_type, actionType, payload = {} } = req.body || {};
+      const resolvedProfileId = profileId || profile_id;
+      const resolvedActionType = actionType || action_type;
+      const game = await submitSupabaseAction({
+        gameId,
+        profileId: resolvedProfileId,
+        actionType: resolvedActionType,
+        payload
+      });
+      return res.json({ ok: true, game });
+    } catch (error) {
+      return res.status(400).json({ ok: false, error: error.message || 'Unable to process remote action' });
+    }
+  }
+
   const game = findGameById(gameId);
   if (!game) {
     return res.status(404).json({ ok: false, error: 'game not found' });
@@ -664,13 +820,70 @@ function submitAction(req, res) {
 
 app.use(express.json());
 
+app.get('/api/config', (req, res) => {
+  const anonKey = process.env.SUPABASE_ANON_KEY || null;
+  const configured = Boolean(supabaseUrl && anonKey);
+  res.json({
+    ok: true,
+    configured,
+    url: supabaseUrl,
+    anonKey,
+    message: configured
+      ? 'Supabase public config is available for Realtime subscriptions.'
+      : 'Add SUPABASE_URL and SUPABASE_ANON_KEY to .env to enable browser-side realtime.'
+  });
+});
+
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
     app: 'Alliance',
     status: 'running',
-    environment: process.env.NODE_ENV || 'development'
+    environment: process.env.NODE_ENV || 'development',
+    supabaseConfigured: hasSupabaseConfig()
   });
+});
+
+app.get('/api/supabase/status', (req, res) => {
+  res.json({
+    ok: true,
+    configured: hasSupabaseConfig(),
+    hasUrl: Boolean(supabaseUrl),
+    hasServiceRoleKey: Boolean(supabaseServiceRoleKey),
+    message: hasSupabaseConfig()
+      ? 'Supabase is configured for the repo.'
+      : 'Add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to .env to enable remote Supabase operations.'
+  });
+});
+
+app.post('/api/profiles', async (req, res) => {
+  const { display_name, displayName, icon, color, auth_user_id, authUserId } = req.body || {};
+  const profileName = display_name || displayName || 'Player';
+  const profileIcon = icon || '⚔️';
+  const profileColor = color || '#4a7ae8';
+
+  if (!hasSupabaseConfig()) {
+    const structured = {
+      id: createId('profile'),
+      display_name: profileName,
+      icon: profileIcon,
+      color: profileColor,
+      auth_user_id: auth_user_id || authUserId || null
+    };
+    return res.json({ ok: true, profile: structured });
+  }
+
+  try {
+    const profile = await ensureProfile({
+      displayName: profileName,
+      icon: profileIcon,
+      color: profileColor,
+      authUserId: auth_user_id || authUserId || null
+    });
+    return res.json({ ok: true, profile });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message || 'Unable to create profile' });
+  }
 });
 
 app.get('/api/lobbies', listLobbies);
